@@ -1,6 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   Alert,
+  Linking,
   SafeAreaView,
   ScrollView,
   StatusBar,
@@ -18,6 +20,8 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
+const AppContext = createContext(null);
+const useApp = () => useContext(AppContext);
 
 const C = {
   navy: '#26356D',
@@ -86,6 +90,46 @@ const PRODUCTS = [
 
 const money = value =>
   `R$ ${Number(value || 0).toFixed(2).replace('.', ',')}`;
+
+function montarEnderecoCompleto(dados) {
+  if (!dados) return '';
+
+  return [
+    dados.logradouro,
+    dados.numero ? `nº ${dados.numero}` : '',
+    dados.complemento,
+    dados.bairro,
+    dados.localidade,
+    dados.uf,
+    dados.cep ? `CEP ${dados.cep}` : '',
+    'Brasil',
+  ].filter(Boolean).join(', ');
+}
+
+async function abrirGoogleMaps(endereco, rota = false) {
+  if (!endereco || !endereco.trim()) {
+    Alert.alert(
+      'Endereço não encontrado',
+      'Consulte um CEP válido antes de abrir o mapa.'
+    );
+    return;
+  }
+
+  const destino = encodeURIComponent(endereco);
+
+  const url = rota
+    ? `https://www.google.com/maps/dir/?api=1&destination=${destino}&travelmode=driving`
+    : `https://www.google.com/maps/search/?api=1&query=${destino}`;
+
+  try {
+    await Linking.openURL(url);
+  } catch (error) {
+    Alert.alert(
+      'Não foi possível abrir o Maps',
+      'Verifique se há um navegador ou Google Maps instalado.'
+    );
+  }
+}
 
 function Button({ title, onPress, secondary = false }) {
   return (
@@ -166,6 +210,7 @@ function HomeScreen({ navigation }) {
             <Text style={s.logoText}>
               MACIA <Text style={s.logoPink}>ZERO</Text>
             </Text>
+
             <Text style={s.smallMuted}>
               Seu momento mais doce 💗
             </Text>
@@ -211,6 +256,7 @@ function HomeScreen({ navigation }) {
 
         <View style={s.sectionTitleRow}>
           <Text style={s.sectionTitle}>Mais pedidos</Text>
+
           <Text style={s.smallMuted}>
             {filtered.length} produtos
           </Text>
@@ -248,6 +294,7 @@ function HomeScreen({ navigation }) {
             <Text style={s.infoTitle}>
               Seu pedido, do seu jeito!
             </Text>
+
             <Text style={s.infoText}>
               Escolha, personalize e aproveite.
             </Text>
@@ -446,9 +493,8 @@ function ProductScreen({ route, navigation }) {
 }
 
 /* CARRINHO */
-
 function CartScreen({ route, navigation }) {
-  const [items, setItems] = useState([]);
+  const { items, setItems } = useApp();
   const [coupon, setCoupon] = useState('');
   const [discount, setDiscount] = useState(false);
 
@@ -569,6 +615,18 @@ function CartScreen({ route, navigation }) {
                   <Text style={s.smallMuted}>
                     {item.quantity} × {money(item.price)}
                   </Text>
+
+                  {!!item.flavor && (
+                    <Text style={s.smallMuted}>
+                      Sabor: {item.flavor} • Recipiente: {item.container}
+                    </Text>
+                  )}
+
+                  {!!item.toppings?.length && (
+                    <Text style={s.smallMuted}>
+                      Adicionais: {item.toppings.join(', ')}
+                    </Text>
+                  )}
 
                   <Text style={s.price}>
                     {money(item.quantity * item.price)}
@@ -745,12 +803,16 @@ function CustomScreen({ navigation }) {
 
   const addCustomToCart = () => {
     const product = {
-      id: `custom-${flavor}-${container}-${toppings.join('-')}`,
+      id: `custom-${flavor}-${container}`,
       cartKey: `custom-${Date.now()}`,
-      name: `${container} de ${flavor}`,
+      name: `${container} MACIA de ${flavor}`,
       description: toppings.length
         ? `Adicionais: ${toppings.join(', ')}`
-        : 'Sorvete personalizado',
+        : 'Sem adicionais',
+      flavor,
+      container,
+      toppings: [...toppings],
+      isCustom: true,
       category: 'Personalizados',
       price,
       emoji: '🍨',
@@ -782,6 +844,7 @@ function CustomScreen({ navigation }) {
             ]}
           >
             <Text style={s.bodyText}>{item}</Text>
+
             <Text style={s.choiceMark}>
               {flavor === item ? '✓' : '○'}
             </Text>
@@ -802,6 +865,7 @@ function CustomScreen({ navigation }) {
             ]}
           >
             <Text style={s.bodyText}>{item}</Text>
+
             <Text style={s.choiceMark}>
               {container === item ? '✓' : '○'}
             </Text>
@@ -825,6 +889,7 @@ function CustomScreen({ navigation }) {
               ]}
             >
               <Text style={s.bodyText}>{item}</Text>
+
               <Text style={s.choiceMark}>
                 {selected ? '✓' : '○'}
               </Text>
@@ -854,7 +919,28 @@ function CustomScreen({ navigation }) {
         <Button
           title="Ir para o carrinho"
           secondary
-          onPress={() => navigation.navigate('Carrinho')}
+          onPress={() => {
+            const draft = {
+              id: `custom-${flavor}-${container}`,
+              cartKey: `custom-draft-${Date.now()}`,
+              name: `${container} MACIA de ${flavor}`,
+              description: toppings.length
+                ? `Adicionais: ${toppings.join(', ')}`
+                : 'Sem adicionais',
+              flavor,
+              container,
+              toppings: [...toppings],
+              isCustom: true,
+              category: 'Personalizados',
+              price,
+              emoji: '🍨',
+              quantity: 1,
+            };
+
+            navigation.navigate('Carrinho', {
+              newItem: draft,
+            });
+          }}
         />
       </ScrollView>
     </SafeAreaView>
@@ -862,17 +948,127 @@ function CustomScreen({ navigation }) {
 }
 
 /* FINALIZAÇÃO DO PEDIDO */
-
 function CheckoutScreen({ route, navigation }) {
+  const { items, setItems, orders, setOrders } = useApp();
+
   const [delivery, setDelivery] = useState('Entrega');
-  const [address, setAddress] = useState('');
   const [payment, setPayment] = useState('Pix');
+  const [cep, setCep] = useState('');
+  const [numero, setNumero] = useState('');
+  const [complemento, setComplemento] = useState('');
+  const [endereco, setEndereco] = useState(null);
+  const [consultando, setConsultando] = useState(false);
+  const [erroCep, setErroCep] = useState('');
 
   const total = route.params?.total || 0;
+  const itensPedido = route.params?.items || items;
+
+  const consultarCep = async () => {
+    const cepLimpo = cep.replace(/\D/g, '');
+
+    if (cepLimpo.length !== 8) {
+      setErroCep('Digite um CEP com 8 números.');
+      setEndereco(null);
+      return;
+    }
+
+    setConsultando(true);
+    setErroCep('');
+    setEndereco(null);
+
+    try {
+      const resposta = await fetch(
+        `https://viacep.com.br/ws/${cepLimpo}/json/`
+      );
+
+      if (!resposta.ok) {
+        throw new Error('Falha na consulta');
+      }
+
+      const dados = await resposta.json();
+
+      if (dados.erro) {
+        setErroCep(
+          'CEP não encontrado. Confira os números e tente novamente.'
+        );
+        return;
+      }
+
+      setEndereco(dados);
+    } catch (error) {
+      setErroCep(
+        'Não foi possível consultar o CEP. Verifique sua conexão e tente novamente.'
+      );
+    } finally {
+      setConsultando(false);
+    }
+  };
+
+  const enderecoFinal = endereco
+    ? montarEnderecoCompleto({
+        ...endereco,
+        numero: numero.trim(),
+        complemento: complemento.trim(),
+      })
+    : '';
+
+  const confirmarPedido = () => {
+    if (delivery === 'Entrega') {
+      if (!endereco) {
+        Alert.alert(
+          'Consulte o CEP',
+          'Informe e consulte um CEP válido antes de confirmar.'
+        );
+        return;
+      }
+
+      if (!numero.trim()) {
+        Alert.alert(
+          'Falta o número',
+          'Informe o número do endereço.'
+        );
+        return;
+      }
+    }
+
+    const novoPedido = {
+      id: `MACIA-${Date.now()}`,
+      date: new Date().toLocaleString('pt-BR'),
+      items: itensPedido,
+      total,
+      delivery,
+      payment,
+      status: 'Em preparação',
+
+      address:
+        delivery === 'Entrega'
+          ? enderecoFinal
+          : 'Retirada na loja',
+
+      addressData:
+        delivery === 'Entrega'
+          ? {
+              ...endereco,
+              numero: numero.trim(),
+              complemento: complemento.trim(),
+            }
+          : null,
+    };
+
+    setOrders(old => [novoPedido, ...old]);
+    setItems([]);
+
+    navigation.navigate('Confirmacao', {
+      ...novoPedido,
+    });
+  };
 
   return (
     <SafeAreaView style={s.safe}>
-      <ScrollView contentContainerStyle={s.page}>
+      <ScrollView
+        contentContainerStyle={s.page}
+        keyboardShouldPersistTaps="handled"
+      >
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Text style={s.link}>‹ Voltar ao carrinho</Text>
         </TouchableOpacity>
@@ -896,6 +1092,7 @@ function CheckoutScreen({ route, navigation }) {
             ]}
           >
             <Text style={s.bodyText}>{item}</Text>
+
             <Text style={s.choiceMark}>
               {delivery === item ? '✓' : '○'}
             </Text>
@@ -908,13 +1105,104 @@ function CheckoutScreen({ route, navigation }) {
               Endereço de entrega
             </Text>
 
+            <Text style={s.fieldLabel}>CEP</Text>
+
             <TextInput
               style={s.search}
-              placeholder="Rua, número, bairro..."
+              placeholder="00000-000"
               placeholderTextColor={C.muted}
-              value={address}
-              onChangeText={setAddress}
+              value={cep}
+              onChangeText={value => {
+                setCep(
+                  value.replace(/[^0-9-]/g, '').slice(0, 9)
+                );
+                setEndereco(null);
+                setErroCep('');
+              }}
+              keyboardType="numeric"
+              maxLength={9}
             />
+
+            <Button
+              title={
+                consultando
+                  ? 'Consultando CEP...'
+                  : 'Buscar endereço pelo CEP'
+              }
+              secondary
+              onPress={consultarCep}
+            />
+
+            {!!erroCep && (
+              <Text style={s.errorText}>
+                {erroCep}
+              </Text>
+            )}
+
+            {endereco && (
+              <View style={s.summary}>
+                <Text style={s.infoTitle}>
+                  Endereço localizado
+                </Text>
+
+                <Text style={s.bodyText}>
+                  {endereco.logradouro ||
+                    'Logradouro não informado pelo CEP'}
+                </Text>
+
+                <Text style={s.bodyText}>
+                  {endereco.bairro ||
+                    'Bairro não informado pelo CEP'}
+                </Text>
+
+                <Text style={s.bodyText}>
+                  {endereco.localidade} - {endereco.uf}
+                </Text>
+
+                <Text style={s.smallMuted}>
+                  CEP: {endereco.cep}
+                </Text>
+              </View>
+            )}
+
+            <Text style={s.fieldLabel}>Número</Text>
+
+            <TextInput
+              style={s.search}
+              placeholder="Número da residência"
+              placeholderTextColor={C.muted}
+              value={numero}
+              onChangeText={setNumero}
+              keyboardType="numeric"
+            />
+
+            <Text style={s.fieldLabel}>
+              Complemento (opcional)
+            </Text>
+
+            <TextInput
+              style={s.search}
+              placeholder="Casa, apartamento, referência..."
+              placeholderTextColor={C.muted}
+              value={complemento}
+              onChangeText={setComplemento}
+            />
+
+            {!!endereco && (
+              <>
+                <Text style={s.smallMuted}>
+                  Endereço completo: {enderecoFinal}
+                </Text>
+
+                <Button
+                  title="Ver endereço no Google Maps"
+                  secondary
+                  onPress={() =>
+                    abrirGoogleMaps(enderecoFinal, false)
+                  }
+                />
+              </>
+            )}
           </>
         )}
 
@@ -937,6 +1225,7 @@ function CheckoutScreen({ route, navigation }) {
             ]}
           >
             <Text style={s.bodyText}>{item}</Text>
+
             <Text style={s.choiceMark}>
               {payment === item ? '✓' : '○'}
             </Text>
@@ -950,27 +1239,20 @@ function CheckoutScreen({ route, navigation }) {
             strong
           />
 
-          <Summary label="Recebimento" value={delivery} />
-          <Summary label="Pagamento" value={payment} />
+          <Summary
+            label="Recebimento"
+            value={delivery}
+          />
+
+          <Summary
+            label="Pagamento"
+            value={payment}
+          />
         </View>
 
         <Button
           title="Confirmar pedido"
-          onPress={() => {
-            if (delivery === 'Entrega' && !address.trim()) {
-              Alert.alert(
-                'Falta o endereço',
-                'Informe o endereço para entrega.'
-              );
-              return;
-            }
-
-            navigation.navigate('Confirmacao', {
-              total,
-              delivery,
-              payment,
-            });
-          }}
+          onPress={confirmarPedido}
         />
 
         <Text style={s.demoNote}>
@@ -985,11 +1267,13 @@ function CheckoutScreen({ route, navigation }) {
 /* CONFIRMAÇÃO */
 
 function ConfirmationScreen({ route, navigation }) {
-  const { total, delivery, payment } = route.params || {};
+  const pedido = route.params || {};
 
   return (
     <SafeAreaView style={s.safe}>
-      <View style={[s.page, s.confirmPage]}>
+      <ScrollView
+        contentContainerStyle={[s.page, s.confirmPage]}
+      >
         <View style={s.confirmIcon}>
           <Text style={{ fontSize: 52 }}>✓</Text>
         </View>
@@ -999,33 +1283,67 @@ function ConfirmationScreen({ route, navigation }) {
         </Text>
 
         <Text style={[s.subtitle, s.centerText]}>
-          Tudo certo! Este é um pedido de demonstração
-          do MACIA Zero.
+          Tudo certo! Seu pedido foi registrado neste dispositivo.
         </Text>
 
         <View style={s.summary}>
           <Summary
+            label="Número"
+            value={pedido.id || '-'}
+          />
+
+          <Summary
             label="Total"
-            value={money(total)}
+            value={money(pedido.total)}
             strong
           />
-          <Summary label="Recebimento" value={delivery} />
-          <Summary label="Pagamento" value={payment} />
-          <Summary label="Status" value="Em preparação" />
+
+          <Summary
+            label="Recebimento"
+            value={pedido.delivery || '-'}
+          />
+
+          <Summary
+            label="Pagamento"
+            value={pedido.payment || '-'}
+          />
+
+          <Summary
+            label="Status"
+            value="Em preparação"
+          />
         </View>
+
+        {!!pedido.address && pedido.delivery === 'Entrega' && (
+          <Text style={s.smallMuted}>
+            Entrega em: {pedido.address}
+          </Text>
+        )}
+
+        <Button
+          title="Acompanhar pedido"
+          onPress={() =>
+            navigation.navigate('AcompanharPedido', {
+              order: pedido,
+            })
+          }
+        />
 
         <Button
           title="Voltar ao início"
+          secondary
           onPress={() => navigation.popToTop()}
         />
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 /* PEDIDOS */
 
-function OrdersScreen() {
+function OrdersScreen({ navigation }) {
+  const { orders } = useApp();
+
   return (
     <SafeAreaView style={s.safe}>
       <ScrollView contentContainerStyle={s.page}>
@@ -1034,34 +1352,206 @@ function OrdersScreen() {
           subtitle="Acompanhe suas compras."
         />
 
-        <View style={s.emptyBox}>
-          <Text style={{ fontSize: 54 }}>📦</Text>
+        {orders.length === 0 ? (
+          <View style={s.emptyBox}>
+            <Text style={{ fontSize: 54 }}>📦</Text>
 
-          <Text style={s.sectionTitle}>
-            Seus pedidos aparecerão aqui
-          </Text>
+            <Text style={s.sectionTitle}>
+              Seus pedidos aparecerão aqui
+            </Text>
 
-          <Text style={[s.subtitle, s.centerText]}>
-            Como este protótipo não usa backend, o histórico
-            não fica salvo.
-          </Text>
+            <Text style={[s.subtitle, s.centerText]}>
+              Quando você confirmar uma compra, ela ficará salva nesta seção.
+            </Text>
+          </View>
+        ) : (
+          orders.map(order => (
+            <View
+              key={order.id}
+              style={s.orderCard}
+            >
+              <View style={s.orderHeader}>
+                <Text style={s.productName}>
+                  {order.id}
+                </Text>
+
+                <Text style={s.statusText}>
+                  {order.status || 'Recebido'}
+                </Text>
+              </View>
+
+              <Text style={s.smallMuted}>
+                {order.date}
+              </Text>
+
+              {(order.items || []).map((item, index) => (
+                <Text
+                  key={`${order.id}-${index}`}
+                  style={s.bodyText}
+                >
+                  {item.quantity}x {item.name}
+                </Text>
+              ))}
+
+              <Text style={s.price}>
+                {money(order.total)}
+              </Text>
+
+              <Text style={s.smallMuted}>
+                {order.delivery === 'Entrega'
+                  ? order.address
+                  : 'Retirada na loja'}
+              </Text>
+
+              <Button
+                title="Acompanhar pedido"
+                onPress={() =>
+                  navigation.navigate('AcompanharPedido', {
+                    order,
+                  })
+                }
+              />
+
+              {order.delivery === 'Entrega' && (
+                <Button
+                  title="Ver localização no Maps"
+                  secondary
+                  onPress={() =>
+                    abrirGoogleMaps(order.address, false)
+                  }
+                />
+              )}
+            </View>
+          ))
+        )}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+/* ACOMPANHAMENTO */
+
+function TrackingScreen({ route, navigation }) {
+  const order = route.params?.order || {};
+
+  return (
+    <SafeAreaView style={s.safe}>
+      <ScrollView contentContainerStyle={s.page}>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Text style={s.link}>‹ Voltar aos pedidos</Text>
+        </TouchableOpacity>
+
+        <Heading
+          title="Acompanhar pedido"
+          subtitle={order.id || 'Pedido MACIA'}
+        />
+
+        <View style={s.summary}>
+          <Summary
+            label="Status"
+            value={order.status || 'Em preparação'}
+            strong
+          />
+
+          <Summary
+            label="Total"
+            value={money(order.total)}
+          />
+
+          <Summary
+            label="Pagamento"
+            value={order.payment || '-'}
+          />
         </View>
+
+        <Text style={s.sectionTitle}>
+          Endereço de entrega
+        </Text>
+
+        <Text style={s.bodyText}>
+          {order.address || 'Retirada na loja'}
+        </Text>
+
+        {order.delivery === 'Entrega' && (
+          <>
+            <Button
+              title="Abrir localização no Google Maps"
+              onPress={() =>
+                abrirGoogleMaps(order.address, false)
+              }
+            />
+
+            <Button
+              title="Abrir rota até o endereço"
+              secondary
+              onPress={() =>
+                abrirGoogleMaps(order.address, true)
+              }
+            />
+          </>
+        )}
+
+        <Text style={s.demoNote}>
+          O mapa e a rota são abertos no Google Maps. O acompanhamento
+          em tempo real do entregador depende de um aplicativo do
+          entregador e de um servidor com compartilhamento de localização,
+          recursos que ainda não fazem parte deste protótipo.
+        </Text>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 /* CLUBE MACIA */
+function ClubScreen({ navigation }) {
+  const [selected, setSelected] = useState(null);
 
-function ClubScreen() {
+  const clubOptions = [
+    {
+      id: 'pontos',
+      emoji: '⭐',
+      title: 'Pontos demonstrativos',
+      description: 'Imagine acumular pontos a cada pedido.',
+      detail: 'No Clube MACIA, cada compra poderá gerar pontos para trocar por vantagens e produtos. Esta função é demonstrativa neste protótipo.',
+    },
+    {
+      id: 'ofertas',
+      emoji: '🎁',
+      title: 'Ofertas especiais',
+      description: 'Benefícios exclusivos para membros.',
+      detail: 'Membros do Clube MACIA poderão acompanhar promoções, descontos e ofertas especiais. As ofertas exibidas nesta versão são ilustrativas.',
+    },
+    {
+      id: 'vantagens',
+      emoji: '💙',
+      title: 'Vantagens do clube',
+      description: 'Descubra benefícios pensados para você.',
+      detail: 'O clube foi pensado para deixar cada visita à MACIA ainda mais especial, reunindo novidades e benefícios em um só lugar.',
+    },
+  ];
+
   return (
     <SafeAreaView style={s.safe}>
       <ScrollView contentContainerStyle={s.page}>
+        <TouchableOpacity
+          onPress={() =>
+            selected
+              ? setSelected(null)
+              : navigation.goBack()
+          }
+          style={s.backButton}
+          activeOpacity={0.75}
+        >
+          <Text style={s.link}>
+            ‹ {selected ? 'Voltar ao Clube MACIA' : 'Voltar ao início'}
+          </Text>
+        </TouchableOpacity>
+
         <View style={s.clubBanner}>
           <Text style={{ fontSize: 48 }}>💙</Text>
 
           <Text style={[s.heading, { color: C.white }]}>
-            Clube MACIA
+            {selected ? selected.title : 'Clube MACIA'}
           </Text>
 
           <Text
@@ -1070,39 +1560,61 @@ function ClubScreen() {
               { color: C.white, textAlign: 'center' },
             ]}
           >
-            Mais sabor, mais vantagens!
+            {selected
+              ? 'Saiba mais sobre essa vantagem'
+              : 'Mais sabor, mais vantagens!'}
           </Text>
         </View>
 
-        <View style={s.infoBanner}>
-          <Text style={{ fontSize: 28 }}>⭐</Text>
+        {selected ? (
+          <View style={s.infoBanner}>
+            <Text style={{ fontSize: 30 }}>
+              {selected.emoji}
+            </Text>
 
-          <View style={{ flex: 1 }}>
-            <Text style={s.infoTitle}>
-              Pontos demonstrativos
-            </Text>
-            <Text style={s.infoText}>
-              Imagine acumular pontos a cada pedido.
-            </Text>
+            <View style={{ flex: 1 }}>
+              <Text style={s.infoTitle}>
+                {selected.title}
+              </Text>
+
+              <Text style={s.infoText}>
+                {selected.detail}
+              </Text>
+            </View>
           </View>
-        </View>
+        ) : (
+          <>
+            {clubOptions.map(option => (
+              <TouchableOpacity
+                key={option.id}
+                style={s.infoBanner}
+                activeOpacity={0.8}
+                onPress={() => setSelected(option)}
+              >
+                <Text style={{ fontSize: 28 }}>
+                  {option.emoji}
+                </Text>
 
-        <View style={s.infoBanner}>
-          <Text style={{ fontSize: 28 }}>🎁</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.infoTitle}>
+                    {option.title}
+                  </Text>
 
-          <View style={{ flex: 1 }}>
-            <Text style={s.infoTitle}>
-              Ofertas especiais
+                  <Text style={s.infoText}>
+                    {option.description}
+                  </Text>
+                </View>
+
+                <Text style={s.clubArrow}>›</Text>
+              </TouchableOpacity>
+            ))}
+
+            <Text style={s.demoNote}>
+              Clube ilustrativo. Cadastro, pontos e ofertas ainda
+              não estão conectados a um sistema real.
             </Text>
-            <Text style={s.infoText}>
-              Benefícios exclusivos para membros.
-            </Text>
-          </View>
-        </View>
-
-        <Text style={s.demoNote}>
-          Clube ilustrativo, sem cadastro ou armazenamento.
-        </Text>
+          </>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -1111,28 +1623,70 @@ function ClubScreen() {
 /* PERFIL */
 
 function ProfileScreen() {
-  const [name, setName] = useState('Cliente MACIA');
-  const [email, setEmail] = useState('');
+  const { profile, setProfile } = useApp();
+  const [draft, setDraft] = useState(profile);
+
+  useEffect(() => {
+    setDraft(profile);
+  }, [profile]);
+
+  const update = (field, value) => {
+    setDraft(old => ({
+      ...old,
+      [field]: value,
+    }));
+  };
+
+  const saveProfile = async () => {
+    const cleaned = {
+      name: draft.name.trim(),
+      email: draft.email.trim(),
+      phone: draft.phone.trim(),
+      address: draft.address.trim(),
+    };
+
+    setProfile(cleaned);
+
+    try {
+      await AsyncStorage.setItem(
+        'macia-zero-profile',
+        JSON.stringify(cleaned)
+      );
+
+      Alert.alert(
+        'Perfil atualizado!',
+        'Suas informações foram salvas com sucesso neste dispositivo.'
+      );
+    } catch (error) {
+      Alert.alert(
+        'Perfil atualizado!',
+        'As informações foram atualizadas durante esta sessão.'
+      );
+    }
+  };
 
   return (
     <SafeAreaView style={s.safe}>
-      <ScrollView contentContainerStyle={s.page}>
+      <ScrollView
+        contentContainerStyle={s.page}
+        keyboardShouldPersistTaps="handled"
+      >
         <Heading
           title="Meu perfil"
-          subtitle="Seus dados no protótipo."
+          subtitle="Adicione ou atualize seus dados de cliente."
         />
 
         <View style={s.avatar}>
           <Text style={{ fontSize: 40 }}>👤</Text>
         </View>
 
-        <Text style={s.fieldLabel}>Nome</Text>
+        <Text style={s.fieldLabel}>Nome completo</Text>
 
         <TextInput
           style={s.search}
-          value={name}
-          onChangeText={setName}
-          placeholder="Seu nome"
+          value={draft.name}
+          onChangeText={value => update('name', value)}
+          placeholder="Digite seu nome"
           placeholderTextColor={C.muted}
         />
 
@@ -1140,22 +1694,44 @@ function ProfileScreen() {
 
         <TextInput
           style={s.search}
-          value={email}
-          onChangeText={setEmail}
+          value={draft.email}
+          onChangeText={value => update('email', value)}
           placeholder="voce@email.com"
           placeholderTextColor={C.muted}
           keyboardType="email-address"
           autoCapitalize="none"
         />
 
+        <Text style={s.fieldLabel}>Telefone</Text>
+
+        <TextInput
+          style={s.search}
+          value={draft.phone}
+          onChangeText={value => update('phone', value)}
+          placeholder="(00) 00000-0000"
+          placeholderTextColor={C.muted}
+          keyboardType="phone-pad"
+        />
+
+        <Text style={s.fieldLabel}>Endereço</Text>
+
+        <TextInput
+          style={s.search}
+          value={draft.address}
+          onChangeText={value => update('address', value)}
+          placeholder="Rua, número, bairro e cidade"
+          placeholderTextColor={C.muted}
+        />
+
         <Button
           title="Salvar alterações"
-          onPress={() =>
-            Alert.alert(
-              'Perfil',
-              'Dados atualizados apenas nesta demonstração.'
-            )
-          }
+          onPress={saveProfile}
+        />
+
+        <Button
+          title="Descartar alterações"
+          secondary
+          onPress={() => setDraft(profile)}
         />
 
         <Button
@@ -1168,6 +1744,11 @@ function ProfileScreen() {
             )
           }
         />
+
+        <Text style={s.demoNote}>
+          Seus dados ficam salvos localmente neste dispositivo.
+          Esta versão não possui cadastro online.
+        </Text>
       </ScrollView>
     </SafeAreaView>
   );
@@ -1200,7 +1781,9 @@ function TabsScreen() {
         component={HomeScreen}
         options={{
           tabBarLabel: 'Início',
-          tabBarIcon: () => <Text style={s.tabIcon}>🏠</Text>,
+          tabBarIcon: () => (
+            <Text style={s.tabIcon}>🏠</Text>
+          ),
         }}
       />
 
@@ -1209,7 +1792,9 @@ function TabsScreen() {
         component={MenuScreen}
         options={{
           tabBarLabel: 'Cardápio',
-          tabBarIcon: () => <Text style={s.tabIcon}>🍨</Text>,
+          tabBarIcon: () => (
+            <Text style={s.tabIcon}>🍨</Text>
+          ),
         }}
       />
 
@@ -1218,7 +1803,9 @@ function TabsScreen() {
         component={CustomScreen}
         options={{
           tabBarLabel: 'Monte o seu',
-          tabBarIcon: () => <Text style={s.tabIcon}>✨</Text>,
+          tabBarIcon: () => (
+            <Text style={s.tabIcon}>✨</Text>
+          ),
         }}
       />
 
@@ -1227,7 +1814,9 @@ function TabsScreen() {
         component={OrdersScreen}
         options={{
           tabBarLabel: 'Pedidos',
-          tabBarIcon: () => <Text style={s.tabIcon}>📦</Text>,
+          tabBarIcon: () => (
+            <Text style={s.tabIcon}>📦</Text>
+          ),
         }}
       />
 
@@ -1236,7 +1825,9 @@ function TabsScreen() {
         component={ProfileScreen}
         options={{
           tabBarLabel: 'Perfil',
-          tabBarIcon: () => <Text style={s.tabIcon}>👤</Text>,
+          tabBarIcon: () => (
+            <Text style={s.tabIcon}>👤</Text>
+          ),
         }}
       />
     </Tab.Navigator>
@@ -1246,37 +1837,139 @@ function TabsScreen() {
 /* APLICATIVO */
 
 export default function App() {
-  return (
-    <NavigationContainer>
-      <StatusBar
-        barStyle="dark-content"
-        backgroundColor={C.background}
-      />
+  const [items, setItems] = useState([]);
+  const [orders, setOrders] = useState([]);
 
-      <Stack.Navigator
-        initialRouteName="Loja"
-        screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: C.background },
-          animation: 'slide_from_right',
-        }}
-      >
-        <Stack.Screen name="Loja" component={TabsScreen} />
-        <Stack.Screen name="Produto" component={ProductScreen} />
-        <Stack.Screen name="Carrinho" component={CartScreen} />
-        <Stack.Screen name="Checkout" component={CheckoutScreen} />
-        <Stack.Screen
-          name="Confirmacao"
-          component={ConfirmationScreen}
+  const [profile, setProfile] = useState({
+    name: 'Cliente MACIA',
+    email: '',
+    phone: '',
+    address: '',
+  });
+
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    const loadSavedData = async () => {
+      try {
+        const savedProfile = await AsyncStorage.getItem(
+          'macia-zero-profile'
+        );
+
+        const savedCart = await AsyncStorage.getItem(
+          'macia-zero-cart'
+        );
+
+        const savedOrders = await AsyncStorage.getItem(
+          'macia-zero-orders'
+        );
+
+        if (savedProfile) {
+          setProfile(JSON.parse(savedProfile));
+        }
+
+        if (savedCart) {
+          setItems(JSON.parse(savedCart));
+        }
+
+        if (savedOrders) {
+          setOrders(JSON.parse(savedOrders));
+        }
+      } catch (error) {
+        console.log(
+          'Não foi possível carregar os dados salvos.',
+          error
+        );
+      } finally {
+        setReady(true);
+      }
+    };
+
+    loadSavedData();
+  }, []);
+
+  useEffect(() => {
+    if (ready) {
+      AsyncStorage.setItem(
+        'macia-zero-cart',
+        JSON.stringify(items)
+      ).catch(() => {});
+
+      AsyncStorage.setItem(
+        'macia-zero-orders',
+        JSON.stringify(orders)
+      ).catch(() => {});
+    }
+  }, [items, orders, ready]);
+
+  return (
+    <AppContext.Provider
+      value={{
+        items,
+        setItems,
+        orders,
+        setOrders,
+        profile,
+        setProfile,
+      }}
+    >
+      <NavigationContainer>
+        <StatusBar
+          barStyle="dark-content"
+          backgroundColor={C.background}
         />
-        <Stack.Screen name="Clube" component={ClubScreen} />
-      </Stack.Navigator>
-    </NavigationContainer>
+
+        <Stack.Navigator
+          initialRouteName="Loja"
+          screenOptions={{
+            headerShown: false,
+            contentStyle: {
+              backgroundColor: C.background,
+            },
+            animation: 'slide_from_right',
+          }}
+        >
+          <Stack.Screen
+            name="Loja"
+            component={TabsScreen}
+          />
+
+          <Stack.Screen
+            name="Produto"
+            component={ProductScreen}
+          />
+
+          <Stack.Screen
+            name="Carrinho"
+            component={CartScreen}
+          />
+
+          <Stack.Screen
+            name="Checkout"
+            component={CheckoutScreen}
+          />
+
+          <Stack.Screen
+            name="AcompanharPedido"
+            component={TrackingScreen}
+          />
+
+          <Stack.Screen
+            name="Confirmacao"
+            component={ConfirmationScreen}
+          />
+
+          <Stack.Screen
+            name="Clube"
+            component={ClubScreen}
+          />
+        </Stack.Navigator>
+      </NavigationContainer>
+    </AppContext.Provider>
   );
 }
 
 /* ESTILOS RESPONSIVOS PARA MOBILE */
-
 const s = StyleSheet.create({
   safe: {
     flex: 1,
@@ -1827,6 +2520,19 @@ const s = StyleSheet.create({
     marginBottom: 22,
   },
 
+  backButton: {
+    alignSelf: 'flex-start',
+    paddingVertical: 4,
+    marginBottom: 8,
+  },
+
+  clubArrow: {
+    color: C.navy,
+    fontSize: 30,
+    fontWeight: '700',
+    marginLeft: 4,
+  },
+
   fieldLabel: {
     color: C.text,
     fontWeight: '700',
@@ -1836,5 +2542,35 @@ const s = StyleSheet.create({
 
   tabIcon: {
     fontSize: 19,
+  },
+
+  errorText: {
+    color: '#C0392B',
+    fontSize: 13,
+    marginTop: 5,
+    marginBottom: 8,
+  },
+
+  orderCard: {
+    backgroundColor: C.white,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 14,
+    marginBottom: 14,
+    gap: 8,
+  },
+
+  orderHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+
+  statusText: {
+    color: C.green,
+    fontSize: 12,
+    fontWeight: '700',
   },
 });
